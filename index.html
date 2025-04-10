@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 - Sistema de Monitoreo y Control</title>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+    <!-- Bootstrap para estilos -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Estilos personalizados -->
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        .card {
+            margin-bottom: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .card-header {
+            font-weight: bold;
+            border-radius: 10px 10px 0 0 !important;
+        }
+        .sensor-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-align: center;
+            margin: 15px 0;
+        }
+        .temp-value { color: #dc3545; }
+        .humidity-value { color: #0d6efd; }
+        .control-btn {
+            margin: 5px;
+            border-radius: 25px;
+            font-weight: bold;
+            width: 100%;
+        }
+        .slider-container {
+            padding: 15px;
+        }
+        .status-on {
+            color: #198754;
+            font-weight: bold;
+        }
+        .status-off {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            color: white;
+            font-size: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Indicador de carga -->
+    <div id="loading">
+        Conectando con Firebase...
+    </div>
+
+    <div class="container">
+        <h1 class="text-center mb-4">Sistema de Monitoreo y Control</h1>
+        
+        <!-- Tarjeta de sensores -->
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                Monitoreo de Sensores
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <!-- Temperatura -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header bg-danger text-white">
+                                Temperatura
+                            </div>
+                            <div class="card-body">
+                                <div class="sensor-value temp-value" id="temperatura">--</div>
+                                <p class="text-center">grados Celsius</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Humedad -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                Humedad
+                            </div>
+                            <div class="card-body">
+                                <div class="sensor-value humidity-value" id="humedad">--</div>
+                                <p class="text-center">porcentaje</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Tarjeta de control de relé -->
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                Control de Relé
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-3">
+                    <h4>Estado actual: <span id="estado-rele" class="status-off">APAGADO</span></h4>
+                </div>
+                <div class="row">
+                    <div class="col-6">
+                        <button id="btn-encender" class="btn btn-success control-btn">ENCENDER</button>
+                    </div>
+                    <div class="col-6">
+                        <button id="btn-apagar" class="btn btn-danger control-btn">APAGAR</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Tarjeta de control de servomotor -->
+        <div class="card">
+            <div class="card-header bg-warning text-dark">
+                Control de Servomotor
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-3">
+                    <h4>Posición actual: <span id="posicion-servo">90°</span></h4>
+                </div>
+                <div class="slider-container">
+                    <label for="range-servo" class="form-label">Ajustar posición (0° - 180°)</label>
+                    <input type="range" class="form-range" min="0" max="180" step="1" id="range-servo" value="90">
+                    <div class="text-center mt-3">
+                        <button id="btn-servo" class="btn btn-warning control-btn">ENVIAR POSICIÓN</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Botón de actualización -->
+        <div class="text-center mt-3 mb-5">
+            <button id="btn-actualizar" class="btn btn-primary btn-lg">
+                ACTUALIZAR DATOS
+            </button>
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script>
+        // Configuración de Firebase
+        const firebaseConfig = {
+            apiKey: "TU_API_KEY",
+            authDomain: "tu-proyecto.firebaseapp.com",
+            databaseURL: "https://tu-proyecto-default-rtdb.firebaseio.com",
+            projectId: "tu-proyecto",
+            storageBucket: "tu-proyecto.appspot.com",
+            messagingSenderId: "tu-messaging-id",
+            appId: "tu-app-id"
+        };
+        
+        // Inicializar Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        
+        // Referencias a elementos del DOM
+        const tempElement = document.getElementById('temperatura');
+        const humidityElement = document.getElementById('humedad');
+        const relayStatusElement = document.getElementById('estado-rele');
+        const servoPositionElement = document.getElementById('posicion-servo');
+        const servoSlider = document.getElementById('range-servo');
+        const loadingElement = document.getElementById('loading');
+        
+        // Ocultar indicador de carga cuando la página esté lista
+        window.onload = function() {
+            loadingElement.style.display = 'none';
+        };
+        
+        // Función para leer datos del sensor
+        function readSensorData() {
+            loadingElement.style.display = 'flex';
+            loadingElement.innerText = 'Actualizando datos...';
+            
+            database.ref('sensor_data').once('value')
+                .then((snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        // Actualizar valores en la interfaz
+                        tempElement.innerText = data.temperature ? data.temperature.toFixed(1) : '--';
+                        humidityElement.innerText = data.humidity ? data.humidity.toFixed(1) : '--';
+                        
+                        // Actualizar estado del relé
+                        if (data.relay_status === 'ON') {
+                            relayStatusElement.innerText = 'ENCENDIDO';
+                            relayStatusElement.className = 'status-on';
+                        } else {
+                            relayStatusElement.innerText = 'APAGADO';
+                            relayStatusElement.className = 'status-off';
+                        }
+                        
+                        // Actualizar posición del servo
+                        const servoPos = data.servo_position || 90;
+                        servoPositionElement.innerText = servoPos + '°';
+                        servoSlider.value = servoPos;
+                    }
+                    loadingElement.style.display = 'none';
+                })
+                .catch((error) => {
+                    console.error('Error al leer datos:', error);
+                    loadingElement.innerText = 'Error al actualizar datos';
+                    setTimeout(() => {
+                        loadingElement.style.display = 'none';
+                    }, 2000);
+                });
+        }
+        
+        // Controlar relé - Encender
+        document.getElementById('btn-encender').addEventListener('click', function() {
+            loadingElement.style.display = 'flex';
+            loadingElement.innerText = 'Enviando comando...';
+            
+            database.ref('commands').set({
+                relay: 'ON'
+            }).then(() => {
+                relayStatusElement.innerText = 'ENCENDIDO';
+                relayStatusElement.className = 'status-on';
+                loadingElement.innerText = 'Comando enviado correctamente';
+                setTimeout(() => {
+                    loadingElement.style.display = 'none';
+                }, 1500);
+            }).catch((error) => {
+                console.error('Error al enviar comando:', error);
+                loadingElement.innerText = 'Error al enviar comando';
+                setTimeout(() => {
+                    loadingElement.style.display = 'none';
+                }, 2000);
+            });
+        });
+        
+        // Controlar relé - Apagar
+        document.getElementById('btn-apagar').addEventListener('click', function() {
+            loadingElement.style.display = 'flex';
+            loadingElement.innerText = 'Enviando comando...';
+            
+            database.ref('commands').set({
+                relay: 'OFF'
+            }).then(() => {
+                relayStatusElement.innerText = 'APAGADO';
+                relayStatusElement.className = 'status-off';
+                loadingElement.innerText = 'Comando enviado correctamente';
+                setTimeout(() => {
+                    loadingElement.style.display = 'none';
+                }, 1500);
+            }).catch((error) => {
+                console.error('Error al enviar comando:', error);
+                loadingElement.innerText = 'Error al enviar comando';
+                setTimeout(() => {
+                    loadingElement.style.display = 'none';
+                }, 2000);
+            });
+        });
+        
+        // Actualizar el texto de posición cuando se mueve el slider
+        servoSlider.addEventListener('input', function() {
+            servoPositionElement.innerText = this.value + '°';
+        });
+        
+        // Controlar servomotor
+        document.getElementById('btn-servo').addEventListener('click', function() {
+            const position = servoSlider.value;
+            loadingElement.style.display = 'flex';
+            loadingElement.innerText = 'Enviando posición del servo...';
+            
+            database.ref('commands').set({
+                servo: parseInt(position)
+            }).then(() => {
+                loadingElement.innerText = 'Posición enviada correctamente';
+                setTimeout(() => {
+                    loadingElement.style.display = 'none';
+                }, 1500);
+            }).catch((error) => {
+                console.error('Error al enviar posición:', error);
+                loadingElement.innerText = 'Error al enviar posición';
+                setTimeout(() => {
+                    loadingElement.style.display = 'none';
+                }, 2000);
+            });
+        });
+        
+        // Actualizar datos manualmente
+        document.getElementById('btn-actualizar').addEventListener('click', function() {
+            readSensorData();
+        });
+        
+        // Leer datos al cargar la página
+        readSensorData();
+        
+        // Actualizar datos cada 30 segundos
+        setInterval(readSensorData, 30000);
+    </script>
+</body>
+</html>
