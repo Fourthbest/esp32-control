@@ -4,9 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 - Sistema de Monitoreo y Control</title>
-    <!-- Firebase SDK -->
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
     <!-- Bootstrap para estilos -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Estilos personalizados -->
@@ -69,7 +66,7 @@
 <body>
     <!-- Indicador de carga -->
     <div id="loading">
-        Conectando con Firebase...
+        Conectando con ThingSpeak...
     </div>
 
     <div class="container">
@@ -160,20 +157,10 @@
     
     <!-- Scripts -->
     <script>
-        // Configuración de Firebase
-        const firebaseConfig = {
-            apiKey: "AIzaSyAXGIyoNj2_YUDCIwk8g4SstUKvAritEBk",
-            authDomain: "esp32monitoreocontrol.firebaseapp.com",
-            databaseURL: "https://esp32monitoreocontrol-default-rtdb.firebaseio.com",
-            projectId: "esp32monitoreocontrol",
-            storageBucket: "esp32monitoreocontrol.firebasestorage.app",
-            messagingSenderId: "840629264771",
-            appId: "1:840629264771:web:31da23c48e77f8a01cd6b6"
-        };
-        
-        // Inicializar Firebase
-        firebase.initializeApp(firebaseConfig);
-        const database = firebase.database();
+        // Configuración de ThingSpeak
+        const channelID = '0000000'; // Reemplazar con tu Channel ID
+        const readAPIKey = 'TU_API_KEY_READ'; // Reemplazar con tu Read API Key
+        const writeAPIKey = 'TU_API_KEY_WRITE'; // Reemplazar con tu Write API Key
         
         // Referencias a elementos del DOM
         const tempElement = document.getElementById('temperatura');
@@ -188,36 +175,55 @@
             loadingElement.style.display = 'none';
         };
         
-        // Función para leer datos del sensor
+        // Función para leer datos del sensor desde ThingSpeak
         function readSensorData() {
             loadingElement.style.display = 'flex';
             loadingElement.innerText = 'Actualizando datos...';
             
-            database.ref('sensor_data').once('value')
-                .then((snapshot) => {
-                    const data = snapshot.val();
-                    if (data) {
-                        // Actualizar valores en la interfaz
-                        tempElement.innerText = data.temperature ? data.temperature.toFixed(1) : '--';
-                        humidityElement.innerText = data.humidity ? data.humidity.toFixed(1) : '--';
-                        
-                        // Actualizar estado del relé
-                        if (data.relay_status === 'ON') {
-                            relayStatusElement.innerText = 'ENCENDIDO';
-                            relayStatusElement.className = 'status-on';
-                        } else {
-                            relayStatusElement.innerText = 'APAGADO';
-                            relayStatusElement.className = 'status-off';
-                        }
-                        
-                        // Actualizar posición del servo
-                        const servoPos = data.servo_position || 90;
-                        servoPositionElement.innerText = servoPos + '°';
-                        servoSlider.value = servoPos;
+            // Construir URL para obtener los últimos datos
+            const url = `https://api.thingspeak.com/channels/${channelID}/feeds/last.json?api_key=${readAPIKey}`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    // Actualizar valores en la interfaz
+                    const temperature = parseFloat(data.field1);
+                    const humidity = parseFloat(data.field2);
+                    const relayStatus = parseInt(data.field3);
+                    const servoPosition = parseInt(data.field4);
+                    
+                    // Temperatura
+                    if (!isNaN(temperature)) {
+                        tempElement.innerText = temperature.toFixed(1);
+                    } else {
+                        tempElement.innerText = '--';
                     }
+                    
+                    // Humedad
+                    if (!isNaN(humidity)) {
+                        humidityElement.innerText = humidity.toFixed(1);
+                    } else {
+                        humidityElement.innerText = '--';
+                    }
+                    
+                    // Estado del relé
+                    if (relayStatus === 1) {
+                        relayStatusElement.innerText = 'ENCENDIDO';
+                        relayStatusElement.className = 'status-on';
+                    } else {
+                        relayStatusElement.innerText = 'APAGADO';
+                        relayStatusElement.className = 'status-off';
+                    }
+                    
+                    // Posición del servo
+                    if (!isNaN(servoPosition)) {
+                        servoPositionElement.innerText = servoPosition + '°';
+                        servoSlider.value = servoPosition;
+                    }
+                    
                     loadingElement.style.display = 'none';
                 })
-                .catch((error) => {
+                .catch(error => {
                     console.error('Error al leer datos:', error);
                     loadingElement.innerText = 'Error al actualizar datos';
                     setTimeout(() => {
@@ -226,50 +232,60 @@
                 });
         }
         
-        // Controlar relé - Encender
-        document.getElementById('btn-encender').addEventListener('click', function() {
+        // Función para enviar comandos a ThingSpeak
+        function sendCommand(field, value) {
             loadingElement.style.display = 'flex';
             loadingElement.innerText = 'Enviando comando...';
             
-            database.ref('commands').set({
-                relay: 'ON'
-            }).then(() => {
-                relayStatusElement.innerText = 'ENCENDIDO';
-                relayStatusElement.className = 'status-on';
-                loadingElement.innerText = 'Comando enviado correctamente';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 1500);
-            }).catch((error) => {
-                console.error('Error al enviar comando:', error);
-                loadingElement.innerText = 'Error al enviar comando';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 2000);
-            });
+            // Construir URL para enviar comando
+            let url = `https://api.thingspeak.com/update?api_key=${writeAPIKey}`;
+            url += `&${field}=${value}`;
+            
+            fetch(url)
+                .then(response => response.text())
+                .then(data => {
+                    if (data > 0) {
+                        loadingElement.innerText = 'Comando enviado correctamente';
+                        setTimeout(() => {
+                            loadingElement.style.display = 'none';
+                        }, 1500);
+                        
+                        // Actualizar interfaz inmediatamente
+                        if (field === 'field5') { // Comando de relé
+                            if (value === 1) {
+                                relayStatusElement.innerText = 'ENCENDIDO';
+                                relayStatusElement.className = 'status-on';
+                            } else {
+                                relayStatusElement.innerText = 'APAGADO';
+                                relayStatusElement.className = 'status-off';
+                            }
+                        } else if (field === 'field6') { // Comando de servo
+                            servoPositionElement.innerText = value + '°';
+                        }
+                    } else {
+                        loadingElement.innerText = 'Error al enviar comando';
+                        setTimeout(() => {
+                            loadingElement.style.display = 'none';
+                        }, 2000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error al enviar comando:', error);
+                    loadingElement.innerText = 'Error al enviar comando';
+                    setTimeout(() => {
+                        loadingElement.style.display = 'none';
+                    }, 2000);
+                });
+        }
+        
+        // Controlar relé - Encender
+        document.getElementById('btn-encender').addEventListener('click', function() {
+            sendCommand('field5', 1);
         });
         
         // Controlar relé - Apagar
         document.getElementById('btn-apagar').addEventListener('click', function() {
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Enviando comando...';
-            
-            database.ref('commands').set({
-                relay: 'OFF'
-            }).then(() => {
-                relayStatusElement.innerText = 'APAGADO';
-                relayStatusElement.className = 'status-off';
-                loadingElement.innerText = 'Comando enviado correctamente';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 1500);
-            }).catch((error) => {
-                console.error('Error al enviar comando:', error);
-                loadingElement.innerText = 'Error al enviar comando';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 2000);
-            });
+            sendCommand('field5', 0);
         });
         
         // Actualizar el texto de posición cuando se mueve el slider
@@ -280,23 +296,7 @@
         // Controlar servomotor
         document.getElementById('btn-servo').addEventListener('click', function() {
             const position = servoSlider.value;
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Enviando posición del servo...';
-            
-            database.ref('commands').set({
-                servo: parseInt(position)
-            }).then(() => {
-                loadingElement.innerText = 'Posición enviada correctamente';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 1500);
-            }).catch((error) => {
-                console.error('Error al enviar posición:', error);
-                loadingElement.innerText = 'Error al enviar posición';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 2000);
-            });
+            sendCommand('field6', position);
         });
         
         // Actualizar datos manualmente
