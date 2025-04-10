@@ -1,314 +1,115 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 - Sistema de Monitoreo y Control</title>
-    <!-- Bootstrap para estilos -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Estilos personalizados -->
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f5f5f5;
-            padding: 20px;
-        }
-        .card {
-            margin-bottom: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        .card-header {
-            font-weight: bold;
-            border-radius: 10px 10px 0 0 !important;
-        }
-        .sensor-value {
-            font-size: 2.5rem;
-            font-weight: bold;
-            text-align: center;
-            margin: 15px 0;
-        }
-        .temp-value { color: #dc3545; }
-        .humidity-value { color: #0d6efd; }
-        .control-btn {
-            margin: 5px;
-            border-radius: 25px;
-            font-weight: bold;
-            width: 100%;
-        }
-        .slider-container {
-            padding: 15px;
-        }
-        .status-on {
-            color: #198754;
-            font-weight: bold;
-        }
-        .status-off {
-            color: #dc3545;
-            font-weight: bold;
-        }
-        #loading {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-            color: white;
-            font-size: 1.5rem;
-        }
-    </style>
-</head>
-<body>
-    <!-- Indicador de carga -->
-    <div id="loading">
-        Conectando con ThingSpeak...
-    </div>
+<!-- Agrega Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/9.6.11/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.6.11/firebase-database-compat.js"></script>
 
-    <div class="container">
-        <h1 class="text-center mb-4">Sistema de Monitoreo y Control</h1>
-        
-        <!-- Tarjeta de sensores -->
-        <div class="card">
-            <div class="card-header bg-primary text-white">
-                Monitoreo de Sensores
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    <!-- Temperatura -->
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header bg-danger text-white">
-                                Temperatura
-                            </div>
-                            <div class="card-body">
-                                <div class="sensor-value temp-value" id="temperatura">--</div>
-                                <p class="text-center">grados Celsius</p>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Humedad -->
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header bg-primary text-white">
-                                Humedad
-                            </div>
-                            <div class="card-body">
-                                <div class="sensor-value humidity-value" id="humedad">--</div>
-                                <p class="text-center">porcentaje</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Tarjeta de control de relé -->
-        <div class="card">
-            <div class="card-header bg-success text-white">
-                Control de Relé
-            </div>
-            <div class="card-body">
-                <div class="text-center mb-3">
-                    <h4>Estado actual: <span id="estado-rele" class="status-off">APAGADO</span></h4>
-                </div>
-                <div class="row">
-                    <div class="col-6">
-                        <button id="btn-encender" class="btn btn-success control-btn">ENCENDER</button>
-                    </div>
-                    <div class="col-6">
-                        <button id="btn-apagar" class="btn btn-danger control-btn">APAGAR</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Tarjeta de control de servomotor -->
-        <div class="card">
-            <div class="card-header bg-warning text-dark">
-                Control de Servomotor
-            </div>
-            <div class="card-body">
-                <div class="text-center mb-3">
-                    <h4>Posición actual: <span id="posicion-servo">90°</span></h4>
-                </div>
-                <div class="slider-container">
-                    <label for="range-servo" class="form-label">Ajustar posición (0° - 180°)</label>
-                    <input type="range" class="form-range" min="0" max="180" step="1" id="range-servo" value="90">
-                    <div class="text-center mt-3">
-                        <button id="btn-servo" class="btn btn-warning control-btn">ENVIAR POSICIÓN</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Botón de actualización -->
-        <div class="text-center mt-3 mb-5">
-            <button id="btn-actualizar" class="btn btn-primary btn-lg">
-                ACTUALIZAR DATOS
-            </button>
-        </div>
-    </div>
-    
-    <!-- Scripts -->
-    <script>
-        // Configuración de ThingSpeak
-        const channelID = '2914348'; // Reemplazar con tu Channel ID
-        const readAPIKey = 'N0LZ9NE7FM77O0TF'; // Reemplazar con tu Read API Key
-        const writeAPIKey = 'XAL65T0LLHUZRSR5'; // Reemplazar con tu Write API Key
-        
-        // Referencias a elementos del DOM
-        const tempElement = document.getElementById('temperatura');
-        const humidityElement = document.getElementById('humedad');
-        const relayStatusElement = document.getElementById('estado-rele');
-        const servoPositionElement = document.getElementById('posicion-servo');
-        const servoSlider = document.getElementById('range-servo');
-        const loadingElement = document.getElementById('loading');
-        
-        // Ocultar indicador de carga cuando la página esté lista
-        window.onload = function() {
-            loadingElement.style.display = 'none';
-        };
-        
-        // Función para leer datos del sensor desde ThingSpeak
-        function readSensorData() {
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Actualizando datos...';
-            
-            // Construir URL para obtener los últimos datos
-            const url = `https://api.thingspeak.com/channels/${channelID}/feeds/last.json?api_key=${readAPIKey}`;
-            
-            fetch(url)
-                .then(response => response.json())
-                .then(data => {
-                    // Actualizar valores en la interfaz
-                    const temperature = parseFloat(data.field1);
-                    const humidity = parseFloat(data.field2);
-                    const relayStatus = parseInt(data.field3);
-                    const servoPosition = parseInt(data.field4);
-                    
-                    // Temperatura
-                    if (!isNaN(temperature)) {
-                        tempElement.innerText = temperature.toFixed(1);
-                    } else {
-                        tempElement.innerText = '--';
-                    }
-                    
-                    // Humedad
-                    if (!isNaN(humidity)) {
-                        humidityElement.innerText = humidity.toFixed(1);
-                    } else {
-                        humidityElement.innerText = '--';
-                    }
-                    
-                    // Estado del relé
-                    if (relayStatus === 1) {
-                        relayStatusElement.innerText = 'ENCENDIDO';
-                        relayStatusElement.className = 'status-on';
-                    } else {
-                        relayStatusElement.innerText = 'APAGADO';
-                        relayStatusElement.className = 'status-off';
-                    }
-                    
-                    // Posición del servo
-                    if (!isNaN(servoPosition)) {
-                        servoPositionElement.innerText = servoPosition + '°';
-                        servoSlider.value = servoPosition;
-                    }
-                    
-                    loadingElement.style.display = 'none';
-                })
-                .catch(error => {
-                    console.error('Error al leer datos:', error);
-                    loadingElement.innerText = 'Error al actualizar datos';
-                    setTimeout(() => {
-                        loadingElement.style.display = 'none';
-                    }, 2000);
-                });
+<script>
+  // Tu configuración de Firebase (reemplaza esto con la tuya propia)
+  const firebaseConfig = {
+      apiKey: "AIzaSyAXGIyoNj2_YUDCIwk8g4SstUKvAritEBk",
+      authDomain: "esp32monitoreocontrol.firebaseapp.com",
+      databaseURL: "https://esp32monitoreocontrol-default-rtdb.firebaseio.com",
+      projectId: "esp32monitoreocontrol",
+      storageBucket: "esp32monitoreocontrol.firebasestorage.app",
+      messagingSenderId: "840629264771",
+      appId: "1:840629264771:web:31da23c48e77f8a01cd6b6"
+  };
+
+  // Inicializa Firebase
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  const tempElement = document.getElementById('temperatura');
+  const humidityElement = document.getElementById('humedad');
+  const relayStatusElement = document.getElementById('estado-rele');
+  const servoPositionElement = document.getElementById('posicion-servo');
+  const servoSlider = document.getElementById('range-servo');
+  const loadingElement = document.getElementById('loading');
+
+  // Ocultar loading al inicio
+  window.onload = function () {
+    loadingElement.style.display = 'none';
+    readSensorData();
+  };
+
+  function readSensorData() {
+    loadingElement.style.display = 'flex';
+    loadingElement.innerText = 'Cargando datos desde Firebase...';
+
+    db.ref('/sensores').once('value')
+      .then(snapshot => {
+        const data = snapshot.val();
+        if (data) {
+          const temp = parseFloat(data.temperatura);
+          const hum = parseFloat(data.humedad);
+          const rele = parseInt(data.rele);
+          const servo = parseInt(data.servo);
+
+          tempElement.innerText = isNaN(temp) ? '--' : temp.toFixed(1);
+          humidityElement.innerText = isNaN(hum) ? '--' : hum.toFixed(1);
+
+          if (rele === 1) {
+            relayStatusElement.innerText = 'ENCENDIDO';
+            relayStatusElement.className = 'status-on';
+          } else {
+            relayStatusElement.innerText = 'APAGADO';
+            relayStatusElement.className = 'status-off';
+          }
+
+          servoPositionElement.innerText = servo + '°';
+          servoSlider.value = servo;
         }
-        
-        // Función para enviar comandos a ThingSpeak
-        function sendCommand(field, value) {
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Enviando comando...';
-            
-            // Construir URL para enviar comando
-            let url = `https://api.thingspeak.com/update?api_key=${writeAPIKey}`;
-            url += `&${field}=${value}`;
-            
-            fetch(url)
-                .then(response => response.text())
-                .then(data => {
-                    if (data > 0) {
-                        loadingElement.innerText = 'Comando enviado correctamente';
-                        setTimeout(() => {
-                            loadingElement.style.display = 'none';
-                        }, 1500);
-                        
-                        // Actualizar interfaz inmediatamente
-                        if (field === 'field5') { // Comando de relé
-                            if (value === 1) {
-                                relayStatusElement.innerText = 'ENCENDIDO';
-                                relayStatusElement.className = 'status-on';
-                            } else {
-                                relayStatusElement.innerText = 'APAGADO';
-                                relayStatusElement.className = 'status-off';
-                            }
-                        } else if (field === 'field6') { // Comando de servo
-                            servoPositionElement.innerText = value + '°';
-                        }
-                    } else {
-                        loadingElement.innerText = 'Error al enviar comando';
-                        setTimeout(() => {
-                            loadingElement.style.display = 'none';
-                        }, 2000);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error al enviar comando:', error);
-                    loadingElement.innerText = 'Error al enviar comando';
-                    setTimeout(() => {
-                        loadingElement.style.display = 'none';
-                    }, 2000);
-                });
+
+        loadingElement.style.display = 'none';
+      })
+      .catch(error => {
+        console.error("Error al leer de Firebase:", error);
+        loadingElement.innerText = 'Error al cargar datos';
+        setTimeout(() => loadingElement.style.display = 'none', 2000);
+      });
+  }
+
+  function sendCommand(path, value) {
+    loadingElement.style.display = 'flex';
+    loadingElement.innerText = 'Enviando comando a Firebase...';
+
+    db.ref(`/comandos/${path}`).set(value)
+      .then(() => {
+        loadingElement.innerText = 'Comando enviado';
+        setTimeout(() => loadingElement.style.display = 'none', 1000);
+
+        if (path === 'rele') {
+          relayStatusElement.innerText = value === 1 ? 'ENCENDIDO' : 'APAGADO';
+          relayStatusElement.className = value === 1 ? 'status-on' : 'status-off';
+        } else if (path === 'servo') {
+          servoPositionElement.innerText = value + '°';
         }
-        
-        // Controlar relé - Encender
-        document.getElementById('btn-encender').addEventListener('click', function() {
-            sendCommand('field5', 1);
-        });
-        
-        // Controlar relé - Apagar
-        document.getElementById('btn-apagar').addEventListener('click', function() {
-            sendCommand('field5', 0);
-        });
-        
-        // Actualizar el texto de posición cuando se mueve el slider
-        servoSlider.addEventListener('input', function() {
-            servoPositionElement.innerText = this.value + '°';
-        });
-        
-        // Controlar servomotor
-        document.getElementById('btn-servo').addEventListener('click', function() {
-            const position = servoSlider.value;
-            sendCommand('field6', position);
-        });
-        
-        // Actualizar datos manualmente
-        document.getElementById('btn-actualizar').addEventListener('click', function() {
-            readSensorData();
-        });
-        
-        // Leer datos al cargar la página
-        readSensorData();
-        
-        // Actualizar datos cada 30 segundos
-        setInterval(readSensorData, 30000);
-    </script>
-</body>
-</html>
+      })
+      .catch(error => {
+        console.error("Error al enviar comando:", error);
+        loadingElement.innerText = 'Error al enviar comando';
+        setTimeout(() => loadingElement.style.display = 'none', 2000);
+      });
+  }
+
+  // Botones
+  document.getElementById('btn-encender').addEventListener('click', () => {
+    sendCommand('rele', 1);
+  });
+
+  document.getElementById('btn-apagar').addEventListener('click', () => {
+    sendCommand('rele', 0);
+  });
+
+  servoSlider.addEventListener('input', function () {
+    servoPositionElement.innerText = this.value + '°';
+  });
+
+  document.getElementById('btn-servo').addEventListener('click', () => {
+    const pos = parseInt(servoSlider.value);
+    sendCommand('servo', pos);
+  });
+
+  document.getElementById('btn-actualizar').addEventListener('click', () => {
+    readSensorData();
+  });
+</script>
