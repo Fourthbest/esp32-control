@@ -1,314 +1,449 @@
+<?php
+/*
+ * Interfaz web para el sistema de monitoreo y control IoT
+ * 
+ * Esta interfaz permite:
+ * - Visualizar datos de temperatura y humedad
+ * - Controlar un relé para activar/desactivar un dispositivo
+ * - Controlar la posición de un servomotor
+ * - Mostrar gráficas de los datos en tiempo real
+ */
+
+// Configuración de Firebase (reemplazar con tus credenciales)
+$firebase_url = "https://esp32monitoreocontrol-default-rtdb.firebaseio.com";
+$firebase_token = "v4jM0yikoFXP9v9V4tTy3Kh4dhRQciHtWx4ACdWp";
+
+// Función para obtener datos de Firebase
+function getFirebaseData($path) {
+    global $firebase_url, $firebase_token;
+    $url = "$firebase_url/$path.json?auth=$firebase_token";
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $response = curl_exec($ch);
+    curl_close($ch);
+    return json_decode($response, true);
+}
+
+// Función para enviar comandos a Firebase
+function sendCommandToFirebase($command, $value) {
+    global $firebase_url, $firebase_token;
+    $url = "$firebase_url/commands.json?auth=$firebase_token";
+    $data = json_encode([$command => $value]);
+    
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PATCH");
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+        'Content-Type: application/json',
+        'Content-Length: ' . strlen($data)
+    ));
+    
+    $response = curl_exec($ch);
+    curl_close($ch);
+    return $response;
+}
+
+// Obtener datos del sensor
+$sensor_data = getFirebaseData("sensor_data");
+
+// Obtener historial para gráficas (simulado para este ejemplo)
+// En la implementación real, mantendrías un historial en Firebase
+$history_data = getFirebaseData("history") ?: [
+    "timestamps" => [time()-300, time()-240, time()-180, time()-120, time()-60, time()],
+    "temperature" => [23, 23.5, 24, 24.2, 24.5, $sensor_data['temperature'] ?? 25],
+    "humidity" => [50, 51, 52, 51.5, 51, $sensor_data['humidity'] ?? 50]
+];
+
+// Manejar acciones de control
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['relay_action'])) {
+        sendCommandToFirebase("relay", $_POST['relay_action']);
+        // Redirigir para evitar reenvío del formulario
+        header("Location: ".$_SERVER['PHP_SELF']);
+        exit();
+    }
+    
+    if (isset($_POST['servo_position'])) {
+        $position = intval($_POST['servo_position']);
+        if ($position >= 0 && $position <= 180) {
+            sendCommandToFirebase("servo", $position);
+            // Redirigir para evitar reenvío del formulario
+            header("Location: ".$_SERVER['PHP_SELF']);
+            exit();
+        }
+    }
+}
+?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 - Sistema de Monitoreo y Control</title>
-    <!-- Firebase SDK -->
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
-    <!-- Bootstrap para estilos -->
+    <title>Sistema de Monitoreo y Control IoT</title>
+    <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Estilos personalizados -->
+    <!-- Chart.js para gráficas -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Iconos y animaciones -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --warning-color: #ffc107;
+            --info-color: #17a2b8;
+        }
+        
         body {
+            background-color: #f8f9fa;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f5f5f5;
-            padding: 20px;
         }
-        .card {
-            margin-bottom: 20px;
-            border-radius: 10px;
+        
+        .dashboard-card {
+            border-radius: 15px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s;
+            overflow: hidden;
+            margin-bottom: 20px;
         }
+        
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+        }
+        
         .card-header {
+            background-color: var(--primary-color);
+            color: white;
             font-weight: bold;
-            border-radius: 10px 10px 0 0 !important;
+            padding: 15px;
+            border-bottom: 0;
         }
+        
         .sensor-value {
-            font-size: 2.5rem;
+            font-size: 3rem;
             font-weight: bold;
             text-align: center;
-            margin: 15px 0;
+            margin: 20px 0;
         }
-        .temp-value { color: #dc3545; }
-        .humidity-value { color: #0d6efd; }
+        
+        .temp-value {
+            color: var(--danger-color);
+        }
+        
+        .humidity-value {
+            color: var(--info-color);
+        }
+        
         .control-btn {
-            margin: 5px;
-            border-radius: 25px;
-            font-weight: bold;
             width: 100%;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 50px;
+            font-weight: bold;
         }
+        
+        .on-btn {
+            background-color: var(--success-color);
+            border-color: var(--success-color);
+        }
+        
+        .off-btn {
+            background-color: var(--danger-color);
+            border-color: var(--danger-color);
+        }
+        
         .slider-container {
-            padding: 15px;
+            padding: 20px;
         }
+        
+        .animated-icon {
+            animation: pulse 1.5s infinite alternate;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(1.1); opacity: 1; }
+        }
+        
+        .status-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        
         .status-on {
-            color: #198754;
-            font-weight: bold;
+            background-color: var(--success-color);
+            box-shadow: 0 0 10px var(--success-color);
         }
+        
         .status-off {
-            color: #dc3545;
-            font-weight: bold;
+            background-color: var(--secondary-color);
         }
-        #loading {
+        
+        .refresh-btn {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
+            bottom: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background-color: var(--primary-color);
             color: white;
-            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
         }
     </style>
 </head>
 <body>
-    <!-- Indicador de carga -->
-    <div id="loading">
-        Conectando con Firebase...
-    </div>
-
-    <div class="container">
-        <h1 class="text-center mb-4">Sistema de Monitoreo y Control</h1>
+    <div class="container py-4">
+        <header class="pb-3 mb-4 border-bottom">
+            <h1 class="display-5 fw-bold text-primary">
+                <i class="fas fa-microchip me-2"></i>
+                Sistema de Monitoreo y Control IoT
+            </h1>
+            <p class="text-muted">ESP32 + SIM800L + DHT11 + Relé + Servomotor</p>
+        </header>
         
-        <!-- Tarjeta de sensores -->
-        <div class="card">
-            <div class="card-header bg-primary text-white">
-                Monitoreo de Sensores
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    <!-- Temperatura -->
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header bg-danger text-white">
-                                Temperatura
-                            </div>
-                            <div class="card-body">
-                                <div class="sensor-value temp-value" id="temperatura">--</div>
-                                <p class="text-center">grados Celsius</p>
-                            </div>
-                        </div>
+        <div class="row">
+            <!-- Tarjeta de temperatura -->
+            <div class="col-md-6">
+                <div class="dashboard-card bg-white">
+                    <div class="card-header">
+                        <i class="fas fa-temperature-high me-2"></i>
+                        Temperatura
                     </div>
-                    
-                    <!-- Humedad -->
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header bg-primary text-white">
-                                Humedad
-                            </div>
-                            <div class="card-body">
-                                <div class="sensor-value humidity-value" id="humedad">--</div>
-                                <p class="text-center">porcentaje</p>
-                            </div>
+                    <div class="card-body">
+                        <div class="sensor-value temp-value">
+                            <?= isset($sensor_data['temperature']) ? round($sensor_data['temperature'], 1) : "N/A" ?> °C
+                            <i class="fas fa-thermometer-half ms-2 animated-icon"></i>
+                        </div>
+                        <div class="chart-container" style="position: relative; height:250px;">
+                            <canvas id="temperatureChart"></canvas>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
-        
-        <!-- Tarjeta de control de relé -->
-        <div class="card">
-            <div class="card-header bg-success text-white">
-                Control de Relé
-            </div>
-            <div class="card-body">
-                <div class="text-center mb-3">
-                    <h4>Estado actual: <span id="estado-rele" class="status-off">APAGADO</span></h4>
-                </div>
-                <div class="row">
-                    <div class="col-6">
-                        <button id="btn-encender" class="btn btn-success control-btn">ENCENDER</button>
+            
+            <!-- Tarjeta de humedad -->
+            <div class="col-md-6">
+                <div class="dashboard-card bg-white">
+                    <div class="card-header">
+                        <i class="fas fa-tint me-2"></i>
+                        Humedad
                     </div>
-                    <div class="col-6">
-                        <button id="btn-apagar" class="btn btn-danger control-btn">APAGAR</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Tarjeta de control de servomotor -->
-        <div class="card">
-            <div class="card-header bg-warning text-dark">
-                Control de Servomotor
-            </div>
-            <div class="card-body">
-                <div class="text-center mb-3">
-                    <h4>Posición actual: <span id="posicion-servo">90°</span></h4>
-                </div>
-                <div class="slider-container">
-                    <label for="range-servo" class="form-label">Ajustar posición (0° - 180°)</label>
-                    <input type="range" class="form-range" min="0" max="180" step="1" id="range-servo" value="90">
-                    <div class="text-center mt-3">
-                        <button id="btn-servo" class="btn btn-warning control-btn">ENVIAR POSICIÓN</button>
+                    <div class="card-body">
+                        <div class="sensor-value humidity-value">
+                            <?= isset($sensor_data['humidity']) ? round($sensor_data['humidity'], 1) : "N/A" ?> %
+                            <i class="fas fa-tint ms-2 animated-icon"></i>
+                        </div>
+                        <div class="chart-container" style="position: relative; height:250px;">
+                            <canvas id="humidityChart"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
-        
-        <!-- Botón de actualización -->
-        <div class="text-center mt-3 mb-5">
-            <button id="btn-actualizar" class="btn btn-primary btn-lg">
-                ACTUALIZAR DATOS
-            </button>
+            
+            <!-- Tarjeta de control de relé -->
+            <div class="col-md-6">
+                <div class="dashboard-card bg-white">
+                    <div class="card-header">
+                        <i class="fas fa-power-off me-2"></i>
+                        Control de Relé
+                    </div>
+                    <div class="card-body text-center">
+                        <div class="mb-4">
+                            <h4>Estado actual:</h4>
+                            <div class="d-flex align-items-center justify-content-center mt-3">
+                                <div class="status-indicator <?= ($sensor_data['relay_status'] ?? '') === 'ON' ? 'status-on' : 'status-off' ?>"></div>
+                                <span class="fs-4">
+                                    <?= ($sensor_data['relay_status'] ?? '') === 'ON' ? 'ENCENDIDO' : 'APAGADO' ?>
+                                </span>
+                            </div>
+                            <?php if (($sensor_data['relay_status'] ?? '') === 'ON'): ?>
+                                <div class="animated-icon mt-4">
+                                    <i class="fas fa-bolt fa-3x text-warning"></i>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-6">
+                                <form method="post">
+                                    <button type="submit" name="relay_action" value="ON" class="btn btn-success control-btn on-btn">
+                                        <i class="fas fa-power-off me-2"></i>
+                                        ENCENDER
+                                    </button>
+                                </form>
+                            </div>
+                            <div class="col-6">
+                                <form method="post">
+                                    <button type="submit" name="relay_action" value="OFF" class="btn btn-danger control-btn off-btn">
+                                        <i class="fas fa-power-off me-2"></i>
+                                        APAGAR
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Tarjeta de control de servomotor -->
+            <div class="col-md-6">
+                <div class="dashboard-card bg-white">
+                    <div class="card-header">
+                        <i class="fas fa-sliders-h me-2"></i>
+                        Control de Servomotor
+                    </div>
+                    <div class="card-body">
+                        <h4 class="text-center mb-3">Posición actual:</h4>
+                        <div class="text-center fs-2 fw-bold mb-4">
+                            <?= $sensor_data['servo_position'] ?? 90 ?>°
+                        </div>
+                        
+                        <div class="servo-visualization mb-4 text-center">
+                            <div style="
+                                width: 100px;
+                                height: 20px;
+                                background-color: #333;
+                                margin: 0 auto;
+                                border-radius: 5px;
+                                position: relative;
+                            ">
+                                <div style="
+                                    position: absolute;
+                                    width: 50px;
+                                    height: 5px;
+                                    background-color: #dc3545;
+                                    top: 10px;
+                                    left: 50px;
+                                    transform-origin: left center;
+                                    transform: rotate(<?= $sensor_data['servo_position'] ?? 90 ?>deg);
+                                    border-radius: 5px;
+                                "></div>
+                            </div>
+                        </div>
+                        
+                        <form method="post" class="slider-container">
+                            <label for="servoRange" class="form-label">Ajustar posición (0° - 180°)</label>
+                            <input type="range" class="form-range" min="0" max="180" step="1" id="servoRange" 
+                                   name="servo_position" value="<?= $sensor_data['servo_position'] ?? 90 ?>"
+                                   oninput="this.nextElementSibling.value = this.value + '°'">
+                            <output><?= $sensor_data['servo_position'] ?? 90 ?>°</output>
+                            
+                            <button type="submit" class="btn btn-primary control-btn mt-3">
+                                <i class="fas fa-paper-plane me-2"></i>
+                                ENVIAR POSICIÓN
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
     
+    <!-- Botón de actualización -->
+    <a href="<?= $_SERVER['PHP_SELF'] ?>" class="refresh-btn">
+        <i class="fas fa-sync-alt"></i>
+    </a>
+    
     <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Configuración de Firebase
-        const firebaseConfig = {
-            apiKey: "AIzaSyAXGIyoNj2_YUDCIwk8g4SstUKvAritEBk",
-            authDomain: "esp32monitoreocontrol.firebaseapp.com",
-            databaseURL: "https://esp32monitoreocontrol-default-rtdb.firebaseio.com",
-            projectId: "esp32monitoreocontrol",
-            storageBucket: "esp32monitoreocontrol.firebasestorage.app",
-            messagingSenderId: "840629264771",
-            appId: "1:840629264771:web:31da23c48e77f8a01cd6b6"
-        };
-        
-        // Inicializar Firebase
-        firebase.initializeApp(firebaseConfig);
-        const database = firebase.database();
-        
-        // Referencias a elementos del DOM
-        const tempElement = document.getElementById('temperatura');
-        const humidityElement = document.getElementById('humedad');
-        const relayStatusElement = document.getElementById('estado-rele');
-        const servoPositionElement = document.getElementById('posicion-servo');
-        const servoSlider = document.getElementById('range-servo');
-        const loadingElement = document.getElementById('loading');
-        
-        // Ocultar indicador de carga cuando la página esté lista
-        window.onload = function() {
-            loadingElement.style.display = 'none';
-        };
-        
-        // Función para leer datos del sensor
-        function readSensorData() {
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Actualizando datos...';
-            
-            database.ref('sensor_data').once('value')
-                .then((snapshot) => {
-                    const data = snapshot.val();
-                    if (data) {
-                        // Actualizar valores en la interfaz
-                        tempElement.innerText = data.temperature ? data.temperature.toFixed(1) : '--';
-                        humidityElement.innerText = data.humidity ? data.humidity.toFixed(1) : '--';
-                        
-                        // Actualizar estado del relé
-                        if (data.relay_status === 'ON') {
-                            relayStatusElement.innerText = 'ENCENDIDO';
-                            relayStatusElement.className = 'status-on';
-                        } else {
-                            relayStatusElement.innerText = 'APAGADO';
-                            relayStatusElement.className = 'status-off';
-                        }
-                        
-                        // Actualizar posición del servo
-                        const servoPos = data.servo_position || 90;
-                        servoPositionElement.innerText = servoPos + '°';
-                        servoSlider.value = servoPos;
+        // Configuración del gráfico de temperatura
+        const tempCtx = document.getElementById('temperatureChart').getContext('2d');
+        const tempChart = new Chart(tempCtx, {
+            type: 'line',
+            data: {
+                labels: [
+                    '5 min atrás', '4 min atrás', '3 min atrás', 
+                    '2 min atrás', '1 min atrás', 'Actual'
+                ],
+                datasets: [{
+                    label: 'Temperatura (°C)',
+                    data: <?= json_encode($history_data['temperature']) ?>,
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    borderWidth: 2,
+                    tension: 0.3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        suggestedMin: Math.min(...<?= json_encode($history_data['temperature']) ?>) - 2,
+                        suggestedMax: Math.max(...<?= json_encode($history_data['temperature']) ?>) + 2
                     }
-                    loadingElement.style.display = 'none';
-                })
-                .catch((error) => {
-                    console.error('Error al leer datos:', error);
-                    loadingElement.innerText = 'Error al actualizar datos';
-                    setTimeout(() => {
-                        loadingElement.style.display = 'none';
-                    }, 2000);
-                });
-        }
-        
-        // Controlar relé - Encender
-        document.getElementById('btn-encender').addEventListener('click', function() {
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Enviando comando...';
-            
-            database.ref('commands').set({
-                relay: 'ON'
-            }).then(() => {
-                relayStatusElement.innerText = 'ENCENDIDO';
-                relayStatusElement.className = 'status-on';
-                loadingElement.innerText = 'Comando enviado correctamente';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 1500);
-            }).catch((error) => {
-                console.error('Error al enviar comando:', error);
-                loadingElement.innerText = 'Error al enviar comando';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 2000);
-            });
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
         });
         
-        // Controlar relé - Apagar
-        document.getElementById('btn-apagar').addEventListener('click', function() {
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Enviando comando...';
-            
-            database.ref('commands').set({
-                relay: 'OFF'
-            }).then(() => {
-                relayStatusElement.innerText = 'APAGADO';
-                relayStatusElement.className = 'status-off';
-                loadingElement.innerText = 'Comando enviado correctamente';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 1500);
-            }).catch((error) => {
-                console.error('Error al enviar comando:', error);
-                loadingElement.innerText = 'Error al enviar comando';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 2000);
-            });
+        // Configuración del gráfico de humedad
+        const humidityCtx = document.getElementById('humidityChart').getContext('2d');
+        const humidityChart = new Chart(humidityCtx, {
+            type: 'line',
+            data: {
+                labels: [
+                    '5 min atrás', '4 min atrás', '3 min atrás', 
+                    '2 min atrás', '1 min atrás', 'Actual'
+                ],
+                datasets: [{
+                    label: 'Humedad (%)',
+                    data: <?= json_encode($history_data['humidity']) ?>,
+                    backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    borderWidth: 2,
+                    tension: 0.3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        suggestedMin: Math.min(...<?= json_encode($history_data['humidity']) ?>) - 5,
+                        suggestedMax: Math.max(...<?= json_encode($history_data['humidity']) ?>) + 5
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
         });
         
-        // Actualizar el texto de posición cuando se mueve el slider
-        servoSlider.addEventListener('input', function() {
-            servoPositionElement.innerText = this.value + '°';
+        // Actualizar la página cada 30 segundos
+        setTimeout(() => {
+            location.reload();
+        }, 30000);
+        
+        // Actualizar la visualización del servo cuando se mueve el slider
+        document.getElementById('servoRange').addEventListener('input', function() {
+            const angle = this.value;
+            const servoArm = document.querySelector('.servo-visualization div div');
+            servoArm.style.transform = `rotate(${angle}deg)`;
         });
-        
-        // Controlar servomotor
-        document.getElementById('btn-servo').addEventListener('click', function() {
-            const position = servoSlider.value;
-            loadingElement.style.display = 'flex';
-            loadingElement.innerText = 'Enviando posición del servo...';
-            
-            database.ref('commands').set({
-                servo: parseInt(position)
-            }).then(() => {
-                loadingElement.innerText = 'Posición enviada correctamente';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 1500);
-            }).catch((error) => {
-                console.error('Error al enviar posición:', error);
-                loadingElement.innerText = 'Error al enviar posición';
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 2000);
-            });
-        });
-        
-        // Actualizar datos manualmente
-        document.getElementById('btn-actualizar').addEventListener('click', function() {
-            readSensorData();
-        });
-        
-        // Leer datos al cargar la página
-        readSensorData();
-        
-        // Actualizar datos cada 30 segundos
-        setInterval(readSensorData, 30000);
     </script>
 </body>
 </html>
